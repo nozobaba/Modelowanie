@@ -1,5 +1,12 @@
 import numpy as np
 
+import sys, os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from constants import (
+    ALPHA, P_RADIATOR_W, RHO_AIR, C_AIR,
+    CEILING_HEIGHT_M, WALL_LOSS_BETA,
+)
+
 
 class Ogrzewanie:
 
@@ -8,12 +15,12 @@ class Ogrzewanie:
         mapa_obj,
         stale: dict,
         *,
-        alpha: float = 1.0e-4,
-        P_radiator_W: float = 2000.0,
-        rho_air: float = 1.293,
-        c_air: float = 1005.0,
-        ceiling_height_m: float = 2.5,
-        wall_loss_beta: float = 0.08,
+        alpha: float = ALPHA,
+        P_radiator_W: float = P_RADIATOR_W,
+        rho_air: float = RHO_AIR,
+        c_air: float = C_AIR,
+        ceiling_height_m: float = CEILING_HEIGHT_M,
+        wall_loss_beta: float = WALL_LOSS_BETA,
     ):
         self.mapa = mapa_obj
         self.maski = mapa_obj.daj_maski()
@@ -50,7 +57,7 @@ class Ogrzewanie:
 
         u_new = u.copy()
 
-        # Dyfuzja (tylko w powietrzu/door/grzejnik)
+        # Dyfuzja
         center = u[1:-1, 1:-1]
         up = u[0:-2, 1:-1]
         down = u[2:, 1:-1]
@@ -62,15 +69,13 @@ class Ogrzewanie:
         mask_center = self.maski["powietrze"][1:-1, 1:-1]
         u_new[1:-1, 1:-1][mask_center] = center[mask_center] + factor * lap[mask_center]
 
-        # 2) Warunki brzegowe: okna = temp_zew
-        u_new[self.maski["okno"]] = float(temp_zew)
+        # Okna = temperatura zewnętrzna
+        u_new[self.maski["okno"]] = temp_zew
 
-        # 3) Ściany
-        # - wewnętrzne: izolacja
-        # - zewnętrzne: straty /moich chęci do życia/ do zewnątrz
+        # Ściany
         u_new = self._apply_walls(u_new, temp_zew)
 
-        # 4) Grzanie z mocy P (na pokój)
+        # Grzanie
         energy_J = 0.0
         if knob_by_room is None:
             knob_by_room = {rid: 5 for rid in self.rooms.keys()}
@@ -84,22 +89,21 @@ class Ogrzewanie:
             if r == 0:
                 continue
 
-            # Termostat: średnia temp. w pokoju (powietrze + drzwi + grzejnik)
+            # Termostat
             room_mask = info["room_mask"]
-            room_mean = float(np.mean(u_new[room_mask]))
+            room_mean = np.mean(u_new[room_mask])
             if room_mean >= setpoint_K:
                 continue
 
-            # Moc efektywna i energia w kroku
+            # Moc efektywna
             P_eff = self.P * (r / 5.0)
             E = P_eff * self.dt
             energy_J += E
 
-            # Rozdzielamy energię na objętość powietrza w pokoju
-            n_cells = int(np.sum(info["air_mask"]))
-            if n_cells <= 0:
+            n_air = int(np.sum(info["air_mask"]))
+            if n_air <= 0:
                 continue
-            V_room = n_cells * (self.hx ** 2) * self.H
+            V_room = n_air * (self.hx ** 2) * self.H
             dT = E / (self.rho * self.c * V_room)
 
             u_new[info["air_mask"]] += dT
@@ -108,9 +112,9 @@ class Ogrzewanie:
         u_new = np.nan_to_num(u_new, nan=293.15)
         u_new = np.clip(u_new, 223.15, 373.15)
 
-        return u_new, float(energy_J)
+        return u_new, energy_J
 
-    def _apply_walls(self, u: np.ndarray, temp_zew: float):
+    def _apply_walls(self, u, temp_zew):
         wall = self.maski["sciana"]
         if not np.any(wall):
             return u
@@ -118,19 +122,17 @@ class Ogrzewanie:
         ys, xs = np.where(wall)
         for y, x in zip(ys.tolist(), xs.tolist()):
             neigh = []
-            for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
-                if 0 <= ny < u.shape[0] and 0 <= nx < u.shape[1]:
-                    if not wall[ny, nx]:
-                        neigh.append(float(u[ny, nx]))
+            for yy, xx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
+                if 0 <= yy < u.shape[0] and 0 <= xx < u.shape[1]:
+                    if not wall[yy, xx]:
+                        neigh.append(u[yy, xx])
             if not neigh:
                 continue
 
-            t_in = float(np.mean(neigh))
+            t_in = np.mean(neigh)
             if self.maski["sciana_zew"][y, x]:
-                # zewnętrzna -- część ciepła ucieka na zewnątrz
-                u[y, x] = (1.0 - self.wall_beta) * t_in + self.wall_beta * float(temp_zew)
+                u[y, x] = (1.0 - self.wall_beta) * t_in + self.wall_beta * temp_zew
             else:
-                # wewnętrzna -- izolacja
                 u[y, x] = t_in
 
         return u

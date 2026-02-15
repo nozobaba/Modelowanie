@@ -1,5 +1,6 @@
 import os
 import sys
+import csv
 from dataclasses import dataclass
 
 import numpy as np
@@ -11,6 +12,11 @@ sys.path.append(current_dir)
 
 from pipeline.grid import MapaMieszkania
 from pipeline.physics import Ogrzewanie
+from constants import (
+    DT, HX,
+    APARTMENT_WIDTH_M, APARTMENT_HEIGHT_M,
+    SETPOINT_HOME_C, SETPOINT_AWAY_C,
+)
 
 
 @dataclass
@@ -26,45 +32,56 @@ class SimulationResult:
 
 
 STALE = {
-    "dt": 30.0,   # [s]
-    "hx": 0.2,    # [m]
+    "dt": DT,
+    "hx": HX,
 }
 
-
+DATA_DIR = os.path.join(current_dir, 'data')
 OUTPUT_DIR = os.path.join(current_dir, 'results')
 
 
-def outside_profile(times_s: np.ndarray, kind: str):
-    """Temperatura zewnętrzna jako funkcja czasu:
-      - 'chlodno'      : ok. +2..+7 C
-      - 'zimno'        : ok. -8..-2 C
-      - 'bardzo_zimno' : ok. -18..-10 C
-    """
+def wczytaj_scenariusze(path = None):
+    """Wczytuje scenariusze z CSV."""
+    if path is None:
+        path = os.path.join(DATA_DIR, 'scenariusze.csv')
+    scenariusze = {}
+    with open(path, newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            scenariusze[row['nazwa']] = {
+                'base_C': float(row['base_C']),
+                'amp_C': float(row['amp_C']),
+                'opis': row.get('opis', ''),
+            }
+    return scenariusze
+
+
+SCENARIUSZE = wczytaj_scenariusze()
+
+
+def outside_profile(times_s, kind):
+    """Temperatura zewnętrzna [K] jako f(t). Scenariusze z CSV."""""
+    if kind not in SCENARIUSZE:
+        dostepne = ', '.join(SCENARIUSZE.keys())
+        raise ValueError(f"Nieznany scenariusz '{kind}'. Dostępne: {dostepne}")
+
+    sc = SCENARIUSZE[kind]
     t_h = times_s / 3600.0
     daily = np.cos((t_h - 14.0) * 2.0 * np.pi / 24.0)
 
-    if kind == "chlodno":
-        base_C, amp_C = 4.5, 2.5
-    elif kind == "zimno":
-        base_C, amp_C = -5.0, 3.0
-    elif kind == "bardzo_zimno":
-        base_C, amp_C = -14.0, 4.0
-    else:
-        raise ValueError("kind musi być: 'chlodno' | 'zimno' | 'bardzo_zimno'")
-
-    T_C = base_C + amp_C * daily
+    T_C = sc['base_C'] + sc['amp_C'] * daily
     return T_C + 273.15
 
 
 def build_apartment():
-    dom = MapaMieszkania(10.0, 8.0, STALE["hx"])
+    dom = MapaMieszkania(APARTMENT_WIDTH_M, APARTMENT_HEIGHT_M, STALE["hx"])
     dom.stworz_uklad_do_problemu_3()
     model = Ogrzewanie(dom, STALE)
     return dom, model
 
 
-def draw_layout(ax, dom: MapaMieszkania):
-    """Rysuje plan mieszkania (ściany/okna/grzejniki/drzwi) z legendą."""
+def draw_layout(ax, dom):
+    """Rysuje plan mieszkania z legendą."""""
     grid = dom.grid
 
     # 0 ściana, 1 powietrze, 2 okno, 3 grzejnik, 4 drzwi
@@ -77,10 +94,10 @@ def draw_layout(ax, dom: MapaMieszkania):
     ])
 
     im = ax.imshow(grid, cmap=cmap, origin="lower", vmin=0, vmax=4, interpolation="nearest")
-    ax.set_title("Plan mieszkania (typy komórek)")
+    ax.set_title("Plan mieszkania")
     ax.axis("off")
 
-    # prosta legenda
+    # legenda
     labels = ["Ściana", "Powietrze", "Okno", "Grzejnik", "Drzwi"]
     handles = []
     for i, lab in enumerate(labels):
@@ -89,7 +106,7 @@ def draw_layout(ax, dom: MapaMieszkania):
     ax.legend(handles=handles, loc="upper right", framealpha=0.9)
 
 
-def draw_heatmap(ax, temp_K: np.ndarray, title: str, *, vmin_C: float, vmax_C: float):
+def draw_heatmap(ax, temp_K, title, *, vmin_C, vmax_C):
     temp_C = temp_K - 273.15
     im = ax.imshow(temp_C, cmap="coolwarm", vmin=vmin_C, vmax=vmax_C, origin="lower")
     ax.set_title(title)
@@ -106,8 +123,9 @@ def run_simulation(
     total_hours: float = 24.0,
     away_from_h: float = 8.0,
     away_to_h: float = 16.0,
-    setpoint_home_C: float = 21.0,
-    setpoint_away_C: float = 15.0,):
+    setpoint_home_C: float = SETPOINT_HOME_C,
+    setpoint_away_C: float = SETPOINT_AWAY_C,
+):
     """
       - 'zawsze_grzeje'          : r=5 cały czas (cel 21C)
       - 'wylaczam_na_wyjscie'    : r=0 w czasie 8-16, potem r=5
@@ -140,14 +158,16 @@ def run_simulation(
 
     energy_J_acc = 0.0
     comfort_recovery_h = None
+    snap_captured = set()
 
     for k in range(n_steps):
         t_h = float(times_h[k])
 
         # snapshoty
         for snap_t in (7.0, 15.0, 22.0):
-            if abs(t_h - snap_t) < (dt / 3600.0):
+            if snap_t not in snap_captured and abs(t_h - snap_t) < (dt / 3600.0):
                 snapshots[snap_t] = u.copy()
+                snap_captured.add(snap_t)
 
         # sterowanie
         setpoint = setpoint_home_C
@@ -174,13 +194,13 @@ def run_simulation(
         energy_J_acc += dE_J
         energy_kWh[k] = energy_J_acc / 3_600_000.0
 
-        # metryki temperatur
+        # metryki
         air_vals_C = u[masks["powietrze"]] - 273.15
-        mean_temp_C[k] = float(np.mean(air_vals_C))
-        std_temp_C[k] = float(np.std(air_vals_C))
+        mean_temp_C[k] = np.mean(air_vals_C)
+        std_temp_C[k] = np.std(air_vals_C)
 
         for rid, info in rooms.items():
-            room_means_C[rid][k] = float(np.mean(u[info["room_mask"]] - 273.15))
+            room_means_C[rid][k] = np.mean(u[info["room_mask"]] - 273.15)
 
         if comfort_recovery_h is None and t_h >= away_to_h:
             if mean_temp_C[k] >= (setpoint_home_C - 0.2):
@@ -198,9 +218,9 @@ def run_simulation(
     )
 
 
-def plot_maps_and_curves(dom: MapaMieszkania, res_a: SimulationResult, res_b: SimulationResult, Tout_func, title: str, *, save_tag: str | None = None):
+def plot_maps_and_curves(dom, res_a, res_b, Tout_func, title, *, save_tag=None):
 
-    # Ustalam wspólną skalę kolorów (żeby mapy były porównywalne)
+    # wspólna skala kolorów
     all_snaps = []
     for res in (res_a, res_b):
         for t in (7.0, 15.0, 22.0):
@@ -214,7 +234,7 @@ def plot_maps_and_curves(dom: MapaMieszkania, res_a: SimulationResult, res_b: Si
     else:
         vmin, vmax = 15.0, 22.0
 
-    # --- Figura 1: plan + mapy 2x3
+    # plan + mapy 2x3
     fig = plt.figure(figsize=(14, 8))
     gs = fig.add_gridspec(2, 4, width_ratios=[1.2, 1, 1, 1], wspace=0.15, hspace=0.15)
 
@@ -234,8 +254,8 @@ def plot_maps_and_curves(dom: MapaMieszkania, res_a: SimulationResult, res_b: Si
                 ax.axis("off")
                 continue
 
-            # temp zewn. do podpisu
-            t_out_C = float(Tout_func(t) - 273.15)
+            # temp zewn.
+            t_out_C = Tout_func(t) - 273.15
             im, _ = draw_heatmap(
                 ax,
                 snap,
@@ -245,7 +265,7 @@ def plot_maps_and_curves(dom: MapaMieszkania, res_a: SimulationResult, res_b: Si
             )
             ims.append(im)
 
-    # jedna belka skali dla wszystkich map
+    # belka skali
     if ims:
         cbar = fig.colorbar(ims[0], ax=axes, fraction=0.025, pad=0.02)
         cbar.set_label("Temperatura [°C]")
@@ -257,10 +277,9 @@ def plot_maps_and_curves(dom: MapaMieszkania, res_a: SimulationResult, res_b: Si
         fig.savefig(os.path.join(OUTPUT_DIR, f'mapy_{save_tag}.png'), dpi=180)
     plt.show()
 
-    # --- Figura 2: wykresy (średnia, odchylenie, energia, pokoje) ---
+    # wykresy
     fig2, ax = plt.subplots(2, 2, figsize=(14, 8))
 
-    # Średnia temp.
     ax00 = ax[0, 0]
     ax00.plot(res_a.time_h, res_a.mean_temp_C, label=res_a.name)
     ax00.plot(res_b.time_h, res_b.mean_temp_C, label=res_b.name)
@@ -270,7 +289,6 @@ def plot_maps_and_curves(dom: MapaMieszkania, res_a: SimulationResult, res_b: Si
     ax00.grid(True)
     ax00.legend()
 
-    # Odchylenie standardowe (komfort/równomierność)
     ax01 = ax[0, 1]
     ax01.plot(res_a.time_h, res_a.std_temp_C, label=res_a.name)
     ax01.plot(res_b.time_h, res_b.std_temp_C, label=res_b.name)
@@ -280,7 +298,6 @@ def plot_maps_and_curves(dom: MapaMieszkania, res_a: SimulationResult, res_b: Si
     ax01.grid(True)
     ax01.legend()
 
-    # Energia
     ax10 = ax[1, 0]
     ax10.plot(res_a.time_h, res_a.energy_kWh, label=res_a.name)
     ax10.plot(res_b.time_h, res_b.energy_kWh, label=res_b.name)
@@ -290,7 +307,6 @@ def plot_maps_and_curves(dom: MapaMieszkania, res_a: SimulationResult, res_b: Si
     ax10.grid(True)
     ax10.legend()
 
-    # Temperatury w pokojach
     ax11 = ax[1, 1]
     for rid, series in res_a.room_means_C.items():
         ax11.plot(res_a.time_h, series, label=f"{res_a.name.split(' / ')[1]}: pokój {rid}")
@@ -310,7 +326,6 @@ def plot_maps_and_curves(dom: MapaMieszkania, res_a: SimulationResult, res_b: Si
         fig2.savefig(os.path.join(OUTPUT_DIR, f'wykresy_{save_tag}.png'), dpi=180)
     plt.show()
 
-    # Podsumowanie
     print("\n--- PODSUMOWANIE ---")
     for res in (res_a, res_b):
         e_total = float(res.energy_kWh[-1])
@@ -320,17 +335,14 @@ def plot_maps_and_curves(dom: MapaMieszkania, res_a: SimulationResult, res_b: Si
 
 
 def main():
-    # 3 scenariusze temperatury zewn.
-    for scenario in ("chlodno", "zimno", "bardzo_zimno"):
+    for scenario in SCENARIUSZE:
         dom, model = build_apartment()
 
-        # (wybieramy temperaturę z profilu na podstawie najbliższej godziny)
-        def Tout_at_hour(t_h: float) -> float:
+        def Tout_at_hour(t_h: float, _sc=scenario) -> float:
             t_s = int(round(t_h * 3600.0))
-            return float(outside_profile(np.array([t_s], dtype=float), scenario)[0])
+            return float(outside_profile(np.array([t_s], dtype=float), _sc)[0])
 
         res_const = run_simulation(dom, model, scenario=scenario, strategy="zawsze_grzeje")
-        # model jest stanowy tylko przez parametry — ok użyć drugi raz (u inicjalizujemy w run)
         res_off = run_simulation(dom, model, scenario=scenario, strategy="wylaczam_na_wyjscie")
 
         plot_maps_and_curves(
