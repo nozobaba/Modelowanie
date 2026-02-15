@@ -4,13 +4,19 @@ Projekt realizuje symulację numeryczną rozkładu temperatury w mieszkaniu, maj
 
 ## Cel projektu
 Porównanie dwóch strategii sterowania ogrzewaniem w mieszkaniu o powierzchni 80 m²:
-1. **Strategia Ciągła (Komfort):** Stała temperatura zadana $21^\circ$C przez całą dobę.
-2. **Strategia Oszczędna (Eco):** Obniżenie temperatury do $15^\circ$C w godzinach 8:00–16:00 (nieobecność), powrót do $21^\circ$C po południu.
+1. **Strategia ciągła:** Stała temperatura zadana 21 stopni Celsjusza przez całą dobę.
+2. **Strategia oszczędna:** Obniżenie temperatury w godzinach 8:00–16:00 (nieobecność), powrót do wyjściowej temperatury po południu.
 
 ## Metodologia
 Symulacja opiera się na rozwiązaniu **dwuwymiarowego równania dyfuzji ciepła z członem źródłowym** (grzejniki):
 $$\frac{\partial u}{\partial t} = \alpha \nabla^2 u + f(x,u)$$
 Zastosowano metodę różnic skończonych (FDM) oraz jawny schemat całkowania w czasie (FTCS) na siatce $50 \times 40$. Model uwzględnia straty ciepła przez ściany zewnętrzne i okna oraz zmienne warunki pogodowe.
+
+W projekcie przyjęłam następujące kryteria zimna:
+bardzo zimno: od ok. -18 do -8 stopni
+zimno: od ok. -7 do 2 stopni
+chłodno: od ok. +2 do 7 stopni
+(oczywiście Celsjusza)
 
 ## Kluczowe wyniki
 Przeprowadzono symulacje dla trzech scenariuszy pogodowych (od chłodnej jesieni po mroźną zimę).
