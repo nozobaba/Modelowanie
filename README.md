@@ -13,9 +13,9 @@ $$\frac{\partial u}{\partial t} = \alpha \nabla^2 u + f(x,u)$$
 Zastosowano metodę różnic skończonych (FDM) oraz jawny schemat całkowania w czasie (FTCS) na siatce $50 \times 40$. Model uwzględnia straty ciepła przez ściany zewnętrzne i okna oraz zmienne warunki pogodowe.
 
 W projekcie przyjęłam następujące kryteria zimna:
-bardzo zimno: od ok. -18 do -8 stopni
-zimno: od ok. -7 do 2 stopni
-chłodno: od ok. +2 do 7 stopni
+- bardzo zimno: od ok. -18 do -8 stopni
+- zimno: od ok. -7 do 2 stopni
+- chłodno: od ok. +2 do 7 stopni
 (oczywiście Celsjusza)
 
 ## Kluczowe wyniki
